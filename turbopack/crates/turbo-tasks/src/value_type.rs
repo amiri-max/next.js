@@ -34,7 +34,7 @@ pub struct ValueType {
     /// Set of traits available
     traits: AutoSet<TraitTypeId>,
     /// List of trait methods available
-    trait_methods: AutoMap<&'static TraitMethod, &'static NativeFunction>,
+    pub(crate) trait_methods: AutoMap<&'static TraitMethod, &'static NativeFunction>,
 
     /// Functors for serialization
     any_serialization: Option<(AnySerializationFn, AnyDeserializeSeed)>,
