@@ -19,7 +19,7 @@ use turbo_tasks::{
     FxIndexMap, NonLocalValue, ResolvedVc, ValueToString, Vc, debug::ValueDebugFormat,
     trace::TraceRawVcs,
 };
-use turbo_tasks_fs::{DirectoryContent, DirectoryEntry, FileSystemPath, glob::Glob};
+use turbo_tasks_fs::{DirectoryContent, DirectoryEntry, FileSystemPath};
 use turbopack_core::{
     asset::{Asset, AssetContent},
     chunk::{
@@ -428,7 +428,7 @@ impl Module for RequireContextAsset {
     }
 
     #[turbo_tasks::function]
-    fn side_effects(self: Vc<Self>, _side_effect_free_packages: Vc<Glob>) -> Vc<ModuleSideEffects> {
+    fn side_effects(self: Vc<Self>) -> Vc<ModuleSideEffects> {
         ModuleSideEffects::DeclaredSideEffectFree.cell()
     }
 }

@@ -329,6 +329,7 @@ pub struct EcmascriptModuleAssetBuilder {
     transforms: ResolvedVc<EcmascriptInputTransforms>,
     options: ResolvedVc<EcmascriptOptions>,
     compile_time_info: ResolvedVc<CompileTimeInfo>,
+    side_effect_free_packages: Option<ResolvedVc<Glob>>,
     inner_assets: Option<ResolvedVc<InnerAssets>>,
 }
 
@@ -352,6 +353,7 @@ impl EcmascriptModuleAssetBuilder {
                 *self.transforms,
                 *self.options,
                 *self.compile_time_info,
+                self.side_effect_free_packages.map(|g| *g),
                 *inner_assets,
             )
         } else {
@@ -362,6 +364,7 @@ impl EcmascriptModuleAssetBuilder {
                 *self.transforms,
                 *self.options,
                 *self.compile_time_info,
+                self.side_effect_free_packages.map(|g| *g),
             )
         }
     }
@@ -375,6 +378,7 @@ pub struct EcmascriptModuleAsset {
     pub transforms: ResolvedVc<EcmascriptInputTransforms>,
     pub options: ResolvedVc<EcmascriptOptions>,
     pub compile_time_info: ResolvedVc<CompileTimeInfo>,
+    pub side_effect_free_packages: Option<ResolvedVc<Glob>>,
     pub inner_assets: Option<ResolvedVc<InnerAssets>>,
     #[turbo_tasks(debug_ignore)]
     last_successful_parse: turbo_tasks::TransientState<ReadRef<ParseResult>>,
@@ -388,6 +392,7 @@ impl core::fmt::Debug for EcmascriptModuleAsset {
             .field("transforms", &self.transforms)
             .field("options", &self.options)
             .field("compile_time_info", &self.compile_time_info)
+            .field("side_effect_free_packages", &self.side_effect_free_packages)
             .field("inner_assets", &self.inner_assets)
             .finish()
     }
@@ -456,6 +461,7 @@ impl EcmascriptModuleAsset {
         transforms: ResolvedVc<EcmascriptInputTransforms>,
         options: ResolvedVc<EcmascriptOptions>,
         compile_time_info: ResolvedVc<CompileTimeInfo>,
+        side_effect_free_packages: Option<ResolvedVc<Glob>>,
     ) -> EcmascriptModuleAssetBuilder {
         EcmascriptModuleAssetBuilder {
             source,
@@ -464,6 +470,7 @@ impl EcmascriptModuleAsset {
             transforms,
             options,
             compile_time_info,
+            side_effect_free_packages,
             inner_assets: None,
         }
     }
@@ -625,13 +632,14 @@ async fn determine_module_type_for_directory(
 #[turbo_tasks::value_impl]
 impl EcmascriptModuleAsset {
     #[turbo_tasks::function]
-    pub fn new(
+    fn new(
         source: ResolvedVc<Box<dyn Source>>,
         asset_context: ResolvedVc<Box<dyn AssetContext>>,
         ty: EcmascriptModuleAssetType,
         transforms: ResolvedVc<EcmascriptInputTransforms>,
         options: ResolvedVc<EcmascriptOptions>,
         compile_time_info: ResolvedVc<CompileTimeInfo>,
+        side_effect_free_packages: Option<ResolvedVc<Glob>>,
     ) -> Vc<Self> {
         Self::cell(EcmascriptModuleAsset {
             source,
@@ -639,21 +647,22 @@ impl EcmascriptModuleAsset {
             ty,
             transforms,
             options,
-
             compile_time_info,
+            side_effect_free_packages,
             inner_assets: None,
             last_successful_parse: Default::default(),
         })
     }
 
     #[turbo_tasks::function]
-    pub async fn new_with_inner_assets(
+    async fn new_with_inner_assets(
         source: ResolvedVc<Box<dyn Source>>,
         asset_context: ResolvedVc<Box<dyn AssetContext>>,
         ty: EcmascriptModuleAssetType,
         transforms: ResolvedVc<EcmascriptInputTransforms>,
         options: ResolvedVc<EcmascriptOptions>,
         compile_time_info: ResolvedVc<CompileTimeInfo>,
+        side_effect_free_packages: Option<ResolvedVc<Glob>>,
         inner_assets: ResolvedVc<InnerAssets>,
     ) -> Result<Vc<Self>> {
         if inner_assets.await?.is_empty() {
@@ -664,6 +673,7 @@ impl EcmascriptModuleAsset {
                 *transforms,
                 *options,
                 *compile_time_info,
+                side_effect_free_packages.map(|g| *g),
             ))
         } else {
             Ok(Self::cell(EcmascriptModuleAsset {
@@ -673,6 +683,7 @@ impl EcmascriptModuleAsset {
                 transforms,
                 options,
                 compile_time_info,
+                side_effect_free_packages,
                 inner_assets: Some(inner_assets),
                 last_successful_parse: Default::default(),
             }))
@@ -760,18 +771,21 @@ impl Module for EcmascriptModuleAsset {
     }
 
     #[turbo_tasks::function]
-    async fn side_effects(
-        self: Vc<Self>,
-        side_effect_free_packages: Vc<Glob>,
-    ) -> Result<Vc<ModuleSideEffects>> {
+    async fn side_effects(self: Vc<Self>) -> Result<Vc<ModuleSideEffects>> {
+        let this = self.await?;
         // Check package.json first, so that we can skip parsing the module if it's marked that way.
         // We need to respect package.json configuration over any static analysis we might do.
-        Ok((match *get_side_effect_free_declaration(
-            self.ident().path().owned().await?,
-            side_effect_free_packages,
-        )
-        .await?
-        {
+        let side_effects_declaration = match &this.side_effect_free_packages {
+            Some(side_effect_free_packages) => {
+                *get_side_effect_free_declaration(
+                    self.ident().path().owned().await?,
+                    **side_effect_free_packages,
+                )
+                .await?
+            }
+            None => SideEffectsDeclaration::None,
+        };
+        Ok((match side_effects_declaration {
             SideEffectsDeclaration::SideEffectful => ModuleSideEffects::SideEffectful,
             SideEffectsDeclaration::SideEffectFree => ModuleSideEffects::SideEffectFree,
             SideEffectsDeclaration::None => self.analyze().await?.side_effects,
