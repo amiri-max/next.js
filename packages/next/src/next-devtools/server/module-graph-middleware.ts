@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http'
+import { relative } from 'path'
 import type {
   Project,
   Entrypoints,
@@ -19,16 +20,57 @@ interface ModuleGraphModule {
   size: number
   /** Minimum depth from entry */
   depth: number
-  /** Layers this module appears in */
-  layers: string[]
+  /** Layer from module ident (e.g., 'rsc', 'client', 'ssr', 'action-browser') */
+  layer: string | null
   /** Dependencies */
   imports: string[]
+  /** Debug: raw ident */
+  ident?: string
+}
+
+/**
+ * Extract layer from module ident
+ * Turbopack format: "[project]/app/page.tsx [app-edge-rsc] (ecmascript, Next.js Server Component)"
+ * e.g., "[app-rsc]" -> "server"
+ * e.g., "[app-client]" -> "client"
+ * e.g., "[app-ssr]" -> "ssr"
+ * e.g., "[app-edge-rsc]" -> "server"
+ */
+function extractLayerFromIdent(ident: string): string | null {
+  // Find all [bracket] patterns in the ident, skip [project]
+  const bracketMatches = ident.match(/\[([^\]]+)\]/g)
+  if (bracketMatches) {
+    for (const match of bracketMatches) {
+      const layerPart = match.slice(1, -1).toLowerCase() // Remove [ and ]
+
+      // Skip [project] and path-like brackets
+      if (layerPart === 'project' || layerPart.includes('/')) continue
+
+      // Extract the layer type from patterns like "app-rsc", "app-client", "app-edge-rsc"
+      // SSR is server-side rendering of client components, so treat as client
+      if (layerPart.includes('client')) return 'client'
+      if (layerPart.includes('ssr')) return 'client'
+      if (layerPart.includes('rsc')) return 'server'
+      if (layerPart.includes('action')) return 'action'
+    }
+  }
+
+  // Also check for description part like "(ecmascript, Next.js Server Component)"
+  const lowerIdent = ident.toLowerCase()
+  if (lowerIdent.includes('server component')) return 'server'
+  if (
+    lowerIdent.includes('client component') ||
+    lowerIdent.includes('client entry')
+  )
+    return 'client'
+  if (lowerIdent.includes('server action')) return 'action'
+
+  return null
 }
 
 interface ModuleGraphResult {
   route: string
   routeType: string
-  layers: string[]
   summary: {
     totalModules: number
     userlandModules: number
@@ -95,12 +137,15 @@ function getModuleType(
 
 /**
  * Get a clean display path for userland modules
+ * Strips the prefix from cwd to project dir (e.g., test/e2e/app-dir/app/edge-wrapper.js -> app/edge-wrapper.js)
  */
-function getUserlandPath(modulePath: string, projectPath: string): string {
-  let cleanPath = modulePath
-    .replace(/^\[project\]\//, '')
-    .replace(projectPath, '')
-    .replace(/^\//, '')
+function getUserlandPath(modulePath: string, projectPrefix: string): string {
+  let cleanPath = modulePath.replace(/^\[project\]\//, '')
+
+  // Strip the project prefix (path from cwd to project dir)
+  if (projectPrefix && cleanPath.startsWith(projectPrefix)) {
+    cleanPath = cleanPath.slice(projectPrefix.length)
+  }
 
   cleanPath = cleanPath.split('?')[0].split('#')[0]
   return cleanPath
@@ -111,16 +156,16 @@ function getUserlandPath(modulePath: string, projectPath: string): string {
  */
 function processGraphLayer(
   graph: ModuleGraphSnapshot,
-  layer: string,
-  projectPath: string,
+  projectPrefix: string,
   moduleMap: Map<
     string,
     {
       type: 'userland' | 'external'
       size: number
       depth: number
-      layers: Set<string>
+      layer: string | null
       imports: Set<string>
+      ident: string
     }
   >,
   indexToPath: Map<number, string>
@@ -136,23 +181,30 @@ function processGraphLayer(
     if (moduleType === 'external') {
       displayPath = getPackageName(module.path) || module.path
     } else {
-      displayPath = getUserlandPath(module.path, projectPath)
+      displayPath = getUserlandPath(module.path, projectPrefix)
     }
 
     indexToPath.set(i, displayPath)
+
+    // Extract layer from module ident
+    const moduleLayer = extractLayerFromIdent(module.ident)
 
     const existing = moduleMap.get(displayPath)
     if (existing) {
       existing.size = Math.max(existing.size, module.size)
       existing.depth = Math.min(existing.depth, module.depth)
-      existing.layers.add(layer)
+      // Keep the more specific layer (prefer client/action over rsc)
+      if (moduleLayer && moduleLayer !== 'rsc') {
+        existing.layer = moduleLayer
+      }
     } else {
       moduleMap.set(displayPath, {
         type: moduleType,
         size: module.size,
         depth: module.depth,
-        layers: new Set([layer]),
+        layer: moduleLayer,
         imports: new Set(),
+        ident: module.ident,
       })
     }
   }
@@ -182,7 +234,7 @@ async function buildModuleGraph(
   route: string,
   routeType: string,
   endpoints: { layer: string; endpoint: Endpoint }[],
-  projectPath: string
+  projectPrefix: string
 ): Promise<ModuleGraphResult> {
   const moduleMap = new Map<
     string,
@@ -190,25 +242,24 @@ async function buildModuleGraph(
       type: 'userland' | 'external'
       size: number
       depth: number
-      layers: Set<string>
+      layer: string | null
       imports: Set<string>
+      ident: string
     }
   >()
-  const processedLayers: string[] = []
   const indexToPath = new Map<number, string>()
 
-  for (const { layer, endpoint } of endpoints) {
+  for (const { endpoint } of endpoints) {
     if (typeof endpoint.getModuleGraph !== 'function') continue
 
     try {
       const result = await endpoint.getModuleGraph()
       const graph = result as ModuleGraphSnapshot
       if (graph && graph.modules) {
-        processGraphLayer(graph, layer, projectPath, moduleMap, indexToPath)
-        processedLayers.push(layer)
+        processGraphLayer(graph, projectPrefix, moduleMap, indexToPath)
       }
     } catch {
-      // Skip layers that fail
+      // Skip endpoints that fail
     }
   }
 
@@ -226,8 +277,9 @@ async function buildModuleGraph(
       type: data.type,
       size: data.size,
       depth: data.depth,
-      layers: Array.from(data.layers),
+      layer: data.layer,
       imports: Array.from(data.imports),
+      ident: data.ident,
     })
   }
 
@@ -243,7 +295,6 @@ async function buildModuleGraph(
   return {
     route,
     routeType,
-    layers: processedLayers,
     summary: {
       totalModules: modules.length,
       userlandModules: userlandCount,
@@ -287,32 +338,61 @@ export function moduleGraphMiddleware({
     const project = getTurbopackProject()
     if (!project) {
       return middlewareResponse.json(res, {
-        error: 'Turbopack is not available. Make sure you are running with --turbopack flag.',
+        error:
+          'Turbopack is not available. Make sure you are running with --turbopack flag.',
       })
     }
 
     const entrypoints = getCurrentEntrypoints()
     if (!entrypoints) {
       return middlewareResponse.json(res, {
-        error: 'Entrypoints are not yet available. The dev server may still be starting up.',
+        error:
+          'Entrypoints are not yet available. The dev server may still be starting up.',
       })
     }
 
     // Collect endpoints for this route
     const endpoints: { layer: string; endpoint: Endpoint }[] = []
     let routeType = ''
+    let matchedRoute = route
 
-    // Check App Router routes
-    const appRoute = entrypoints.app.get(route)
+    // Check App Router routes - try exact match first
+    let appRoute = entrypoints.app.get(route)
+
+    // If no exact match, search for a matching route (handles route groups)
+    // Route groups like (group) are in the entrypoint path but not in the URL
+    if (!appRoute) {
+      // Extract the page part from the route (e.g., /dashboard/page -> dashboard, /page -> '')
+      const pagePart = route.replace(/^\//, '').replace(/\/page$/, '')
+
+      for (const [entryRoute, entryValue] of entrypoints.app.entries()) {
+        // Skip non-page routes
+        if (!entryRoute.endsWith('/page')) continue
+
+        // Remove route groups from the entry route to compare
+        // e.g., /(newroot)/dashboard/page -> /dashboard/page
+        const normalizedEntry = entryRoute.replace(/\/\([^)]+\)/g, '')
+        const entryPagePart = normalizedEntry
+          .replace(/^\//, '')
+          .replace(/\/page$/, '')
+
+        if (entryPagePart === pagePart) {
+          appRoute = entryValue
+          matchedRoute = entryRoute
+          break
+        }
+      }
+    }
+
     if (appRoute) {
       routeType = appRoute.type
       if (appRoute.type === 'app-page') {
         endpoints.push({
-          layer: 'server (RSC)',
+          layer: 'server',
           endpoint: appRoute.rscEndpoint,
         })
         endpoints.push({
-          layer: 'client (HTML)',
+          layer: 'client',
           endpoint: appRoute.htmlEndpoint,
         })
       } else if (appRoute.type === 'app-route') {
@@ -351,11 +431,16 @@ export function moduleGraphMiddleware({
     }
 
     try {
+      // Calculate the prefix to strip: relative path from cwd to project dir
+      // e.g., if cwd is /repo and projectPath is /repo/test/app, prefix is "test/app/"
+      const projectPrefix = relative(process.cwd(), projectPath)
+      const prefixToStrip = projectPrefix ? projectPrefix + '/' : ''
+
       const result = await buildModuleGraph(
-        route,
+        matchedRoute,
         routeType,
         endpoints,
-        projectPath
+        prefixToStrip
       )
       return middlewareResponse.json(res, result)
     } catch (error) {

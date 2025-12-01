@@ -6,14 +6,14 @@ interface ModuleGraphModule {
   type: 'userland' | 'external'
   size: number
   depth: number
-  layers: string[]
+  layer: string | null
   imports: string[]
+  ident?: string
 }
 
 interface ModuleGraphData {
   route: string
   routeType: string
-  layers: string[]
   summary: {
     totalModules: number
     userlandModules: number
@@ -44,7 +44,12 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
         transition: 'transform 0.15s ease',
       }}
     >
-      <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
+      <path
+        d="M4.5 2.5L8 6L4.5 9.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+      />
     </svg>
   )
 }
@@ -64,7 +69,6 @@ function ModuleItem({
 }) {
   const hasImports = module.imports.length > 0
   const isExpanded = expandedModules.has(module.source)
-  const isExternal = module.type === 'external'
 
   return (
     <div className="module-graph-item" data-depth={depth}>
@@ -77,18 +81,22 @@ function ModuleItem({
           {hasImports && <ChevronIcon expanded={isExpanded} />}
         </span>
         <span
-          className={`module-graph-item-name ${isExternal ? 'module-graph-item-external' : 'module-graph-item-userland'}`}
-          title={module.source}
+          className="module-graph-item-name"
+          title={module.ident || module.source}
         >
           {module.source}
         </span>
         <span className="module-graph-item-meta">
-          {module.layers.map((layer) => (
-            <span key={layer} className="module-graph-item-layer">
-              {layer}
+          {module.layer && (
+            <span
+              className={`module-graph-item-layer module-graph-layer-${module.layer}`}
+            >
+              {module.layer}
             </span>
-          ))}
-          <span className="module-graph-item-size">{formatBytes(module.size)}</span>
+          )}
+          <span className="module-graph-item-size">
+            {formatBytes(module.size)}
+          </span>
         </span>
       </div>
       {isExpanded && hasImports && (
@@ -141,53 +149,56 @@ function getRouteFromPage(page: string): string | null {
   return `${pagePath}/page`
 }
 
-export function ModuleGraph({ page }: { page: string }) {
-  const [data, setData] = useState<ModuleGraphData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set())
-  const [filter, setFilter] = useState<'all' | 'userland' | 'external'>('all')
-  const [route, setRoute] = useState<string | null>(() => getRouteFromPage(page))
+interface FetchResult {
+  route: string
+  data: ModuleGraphData | null
+  error: string | null
+}
 
-  // Update route when page changes or on mount
-  useEffect(() => {
-    const newRoute = getRouteFromPage(page)
-    if (newRoute !== route) {
-      setRoute(newRoute)
-    }
-  }, [page, route])
+export function ModuleGraph({ page }: { page: string }) {
+  const [result, setResult] = useState<FetchResult | null>(null)
+  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set())
+
+  // Derive route from page prop directly
+  const route = useMemo(() => getRouteFromPage(page), [page])
+
+  // Derive loading/data/error from result - loading when route doesn't match
+  const loading = !result || result.route !== route
+  const data = result?.route === route ? result.data : null
+  const error = result?.route === route ? result.error : null
 
   useEffect(() => {
     if (!route) {
-      setLoading(false)
-      setError('No route available')
       return
     }
 
-    setLoading(true)
-    setError(null)
-    setData(null)
-
+    let cancelled = false
     const basePath = process.env.__NEXT_ROUTER_BASEPATH || ''
-    fetch(`${basePath}/__nextjs_module_graph?route=${encodeURIComponent(route)}`)
+    fetch(
+      `${basePath}/__nextjs_module_graph?route=${encodeURIComponent(route)}`
+    )
       .then((res) => res.json())
-      .then((result) => {
-        if (result.error) {
+      .then((fetchResult) => {
+        if (cancelled) return
+        if (fetchResult.error) {
           // Show available routes if route not found
-          let errorMsg = result.error
-          if (result.availableRoutes?.length > 0) {
-            errorMsg += `\n\nAvailable routes: ${result.availableRoutes.slice(0, 5).join(', ')}`
+          let errorMsg = fetchResult.error
+          if (fetchResult.availableRoutes?.length > 0) {
+            errorMsg += `\n\nAvailable routes: ${fetchResult.availableRoutes.slice(0, 5).join(', ')}`
           }
-          setError(errorMsg)
+          setResult({ route, data: null, error: errorMsg })
         } else {
-          setData(result)
+          setResult({ route, data: fetchResult, error: null })
         }
-        setLoading(false)
       })
       .catch((err) => {
-        setError(err.message)
-        setLoading(false)
+        if (cancelled) return
+        setResult({ route, data: null, error: err.message })
       })
+
+    return () => {
+      cancelled = true
+    }
   }, [route])
 
   const toggleModule = useCallback((source: string) => {
@@ -207,17 +218,11 @@ export function ModuleGraph({ page }: { page: string }) {
     return new Map(data.modules.map((m) => [m.source, m]))
   }, [data])
 
-  const filteredModules = useMemo(() => {
-    if (!data) return []
-    if (filter === 'all') return data.modules
-    return data.modules.filter((m) => m.type === filter)
-  }, [data, filter])
-
   // Get root modules (depth 0 or not imported by anything in userland)
   const rootModules = useMemo(() => {
     if (!data) return []
     const importedModules = new Set<string>()
-    for (const m of filteredModules) {
+    for (const m of data.modules) {
       if (m.type === 'userland') {
         for (const imp of m.imports) {
           importedModules.add(imp)
@@ -225,23 +230,30 @@ export function ModuleGraph({ page }: { page: string }) {
       }
     }
     // Root modules are userland modules that aren't imported by other userland modules
-    return filteredModules.filter(
+    return data.modules.filter(
       (m) => m.type === 'userland' && !importedModules.has(m.source)
     )
-  }, [data, filteredModules])
+  }, [data])
 
   // External packages shown separately
   const externalModules = useMemo(() => {
-    if (filter === 'userland') return []
     if (!data) return []
     return data.modules.filter((m) => m.type === 'external')
-  }, [data, filter])
+  }, [data])
+
+  if (!route) {
+    return (
+      <div className="module-graph-container">
+        <div className="module-graph-error">No route available</div>
+      </div>
+    )
+  }
 
   if (loading) {
     return (
       <div className="module-graph-container">
         <div className="module-graph-loading">
-          Loading module graph for {route || 'unknown route'}...
+          Loading module graph for {route}...
         </div>
       </div>
     )
@@ -270,36 +282,10 @@ export function ModuleGraph({ page }: { page: string }) {
     <div className="module-graph-container">
       <div className="module-graph-header">
         <div className="module-graph-route">{data.route}</div>
-        <div className="module-graph-summary">
-          <span>{data.summary.userlandModules} files</span>
-          <span>{data.summary.externalPackages} packages</span>
-          <span>{formatBytes(data.summary.totalSize)}</span>
-        </div>
-      </div>
-
-      <div className="module-graph-filters">
-        <button
-          className={`module-graph-filter ${filter === 'all' ? 'active' : ''}`}
-          onClick={() => setFilter('all')}
-        >
-          All
-        </button>
-        <button
-          className={`module-graph-filter ${filter === 'userland' ? 'active' : ''}`}
-          onClick={() => setFilter('userland')}
-        >
-          Files
-        </button>
-        <button
-          className={`module-graph-filter ${filter === 'external' ? 'active' : ''}`}
-          onClick={() => setFilter('external')}
-        >
-          Packages
-        </button>
       </div>
 
       <div className="module-graph-content">
-        {filter !== 'external' && rootModules.length > 0 && (
+        {rootModules.length > 0 && (
           <div className="module-graph-section">
             <div className="module-graph-section-title">Files</div>
             {rootModules.map((module) => (
@@ -314,7 +300,7 @@ export function ModuleGraph({ page }: { page: string }) {
           </div>
         )}
 
-        {filter !== 'userland' && externalModules.length > 0 && (
+        {externalModules.length > 0 && (
           <div className="module-graph-section">
             <div className="module-graph-section-title">Packages</div>
             {externalModules.map((module) => (
