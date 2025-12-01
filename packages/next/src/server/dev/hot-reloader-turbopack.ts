@@ -108,6 +108,7 @@ import {
   getDevToolsConfig,
 } from '../../next-devtools/server/devtools-config-middleware'
 import { getAttachNodejsDebuggerMiddleware } from '../../next-devtools/server/attach-nodejs-debugger-middleware'
+import { moduleGraphMiddleware } from '../../next-devtools/server/module-graph-middleware'
 import {
   connectReactDebugChannel,
   connectReactDebugChannelForHtmlRequest,
@@ -781,6 +782,11 @@ export async function createHotReloaderTurbopack(
       },
     }),
     getAttachNodejsDebuggerMiddleware(),
+    moduleGraphMiddleware({
+      projectPath,
+      getTurbopackProject: () => project,
+      getCurrentEntrypoints: () => currentEntrypoints,
+    }),
     ...(nextConfig.experimental.mcpServer
       ? [
           getMcpMiddleware({
