@@ -1,0 +1,120 @@
+sky-sport/
+ ├─ app/
+ │   ├─ layout.tsx
+ │   ├─ page.tsx
+ │   └─ checkout/page.tsx
+ ├─ components/
+ │   └─ Header.tsx
+ ├─ public/
+ │   └─ images/
+ │       ├─ product1.jpg
+ │       ├─ product2.jpg
+ │       └─ product3.jpg
+ ├─ tailwind.config.js
+ └─ globals.css
+module.exports = {
+  content: ['./app/**/*.{ts,tsx}', './components/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        brand: {
+          DEFAULT: '#A5D8FF', // آبی پاستیلی
+          light: '#D0EBFF',
+          dark: '#4EA8DE',
+        },
+      },
+    },
+  },
+  plugins: [],
+}
+
+import './globals.css'
+
+export const metadata = {
+  title: 'SKY SPORT',
+  description: 'فروشگاه ورزشی اسکای اسپرت',
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="fa" dir="rtl">
+      <body className="bg-white text-gray-900">{children}</body>
+    </html>
+  )
+}
+import Header from '@/components/Header'
+
+export default function Home() {
+  return (
+    <>
+      <Header />
+      <main className="container mx-auto px-4">
+        {/* Hero Section */}
+        <section className="mt-6 rounded-xl bg-brand text-white p-6 text-center">
+          <h1 className="text-3xl font-bold">SKY SPORT</h1>
+          <p className="mt-2">جدیدترین محصولات ورزشی با ارسال سریع و کیفیت عالی</p>
+        </section>
+
+        {/* Products Grid */}
+        <section className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6">
+          {['کفش ورزشی', 'تی‌شرت', 'لگ ورزشی'].map((item, i) => (
+            <div key={i} className="border rounded-lg p-4 shadow hover:shadow-lg">
+              <img
+                src={`/images/product${i + 1}.jpg`}
+                alt={item}
+                className="w-full h-48 object-cover rounded"
+              />
+              <h2 className="mt-3 font-semibold">{item}</h2>
+              <p className="text-gray-500">قیمت: ۴۵۰,۰۰۰ تومان</p>
+              <button className="mt-3 w-full bg-brand-dark text-white py-2 rounded">
+                افزودن به سبد
+              </button>
+            </div>
+          ))}
+        </section>
+
+        {/* Footer */}
+        <footer className="mt-12 border-t pt-6 text-center text-gray-500">
+          © 2025 SKY SPORT - همه حقوق محفوظ است
+        </footer>
+      </main>
+    </>
+  )
+}
+export default function Checkout() {
+  return (
+    <main className="container mx-auto px-4 py-8">
+      <h1 className="text-2xl font-bold text-brand">تسویه حساب</h1>
+
+      {/* Cart Summary */}
+      <section className="mt-6 border rounded-lg p-4">
+        <h2 className="font-semibold mb-3">سبد خرید</h2>
+        <div className="flex justify-between">
+          <span>کفش ورزشی</span>
+          <span>۴۵۰,۰۰۰ تومان</span>
+        </div>
+      </section>
+
+      {/* Address Form */}
+      <section className="mt-6 border rounded-lg p-4">
+        <h2 className="font-semibold mb-3">آدرس ارسال</h2>
+        <input type="text" placeholder="نام و نام خانوادگی" className="w-full border rounded p-2 mb-3" />
+        <input type="text" placeholder="آدرس کامل" className="w-full border rounded p-2 mb-3" />
+      </section>
+
+      {/* Payment */}
+      <section className="mt-6 border rounded-lg p-4">
+        <h2 className="font-semibold mb-3">روش پرداخت</h2>
+        <select className="w-full border rounded p-2">
+          <option>زرین‌پال</option>
+          <option>زیبال</option>
+          <option>نکست‌پی</option>
+        </select>
+      </section>
+
+      <button className="mt-6 w-full bg-brand-dark text-white py-3 rounded">
+        تایید و پرداخت
+      </button>
+    </main>
+  )
+}
