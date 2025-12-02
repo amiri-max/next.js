@@ -24,6 +24,8 @@ interface ModuleGraphModule {
   layer: string | null
   /** Dependencies */
   imports: string[]
+  /** Package version (for external modules) */
+  version?: string
   /** Debug: raw ident */
   ident?: string
 }
@@ -101,15 +103,31 @@ function isNextInternal(modulePath: string): boolean {
 }
 
 /**
- * Extract package name from node_modules path
+ * Extract package name and version from node_modules path
  */
-function getPackageName(modulePath: string): string | null {
+function getPackageInfo(modulePath: string): {
+  name: string
+  version?: string
+} | null {
   // Handle pnpm's nested structure
+  // e.g., node_modules/.pnpm/uuid@9.0.0/node_modules/uuid
+  // e.g., node_modules/.pnpm/@babel+core@7.20.0/node_modules/@babel/core
   const pnpmMatch = modulePath.match(
-    /node_modules\/\.pnpm\/[^/]+\/node_modules\/(@[^/]+\/[^/]+|[^/]+)/
+    /node_modules\/\.pnpm\/([^/]+)\/node_modules\/(@[^/]+\/[^/]+|[^/]+)/
   )
   if (pnpmMatch) {
-    return pnpmMatch[1]
+    const pnpmPart = pnpmMatch[1]
+    const packageName = pnpmMatch[2]
+
+    // Extract version from pnpm part (e.g., "uuid@9.0.0" or "@babel+core@7.20.0")
+    // For scoped packages, pnpm uses + instead of /
+    let version: string | undefined
+    const versionMatch = pnpmPart.match(/@(\d+\.\d+\.\d+[^_/]*)/)
+    if (versionMatch) {
+      version = versionMatch[1]
+    }
+
+    return { name: packageName, version }
   }
 
   // Standard node_modules
@@ -121,7 +139,7 @@ function getPackageName(modulePath: string): string | null {
   const packageName = nodeModulesMatch[1]
   if (packageName === '.pnpm') return null
 
-  return packageName
+  return { name: packageName }
 }
 
 /**
@@ -165,6 +183,7 @@ function processGraphLayer(
       depth: number
       layer: string | null
       imports: Set<string>
+      version?: string
       ident: string
     }
   >,
@@ -178,8 +197,13 @@ function processGraphLayer(
     if (moduleType === 'internal') continue
 
     let displayPath: string
+    let version: string | undefined
     if (moduleType === 'external') {
-      displayPath = getPackageName(module.path) || module.path
+      const packageInfo = getPackageInfo(module.path)
+      const packageName = packageInfo?.name || module.path
+      version = packageInfo?.version
+      // Include version in displayPath to keep different versions separate
+      displayPath = version ? `${packageName}@${version}` : packageName
     } else {
       displayPath = getUserlandPath(module.path, projectPrefix)
     }
@@ -197,6 +221,10 @@ function processGraphLayer(
       if (moduleLayer && moduleLayer !== 'rsc') {
         existing.layer = moduleLayer
       }
+      // Keep version if not set
+      if (version && !existing.version) {
+        existing.version = version
+      }
     } else {
       moduleMap.set(displayPath, {
         type: moduleType,
@@ -204,6 +232,7 @@ function processGraphLayer(
         depth: module.depth,
         layer: moduleLayer,
         imports: new Set(),
+        version,
         ident: module.ident,
       })
     }
@@ -244,6 +273,7 @@ async function buildModuleGraph(
       depth: number
       layer: string | null
       imports: Set<string>
+      version?: string
       ident: string
     }
   >()
@@ -279,6 +309,7 @@ async function buildModuleGraph(
       depth: data.depth,
       layer: data.layer,
       imports: Array.from(data.imports),
+      version: data.version,
       ident: data.ident,
     })
   }

@@ -8,6 +8,7 @@ interface ModuleGraphModule {
   depth: number
   layer: string | null
   imports: string[]
+  version?: string
   ident?: string
 }
 

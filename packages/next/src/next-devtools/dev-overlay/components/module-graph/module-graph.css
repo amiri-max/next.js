@@ -77,6 +77,11 @@
   color: var(--color-gray-900);
 }
 
+.module-graph-item-version {
+  color: var(--color-gray-600);
+  margin-left: 2px;
+}
+
 .module-graph-item-missing {
   opacity: 0.5;
 }
