@@ -8,6 +8,9 @@
 .module-graph-header {
   padding: 12px 16px;
   border-bottom: 1px solid var(--color-gray-400);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .module-graph-route {
@@ -15,6 +18,52 @@
   color: var(--color-gray-1000);
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.module-graph-total-size {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-gray-700);
+}
+
+.module-graph-warning-icon {
+  margin-right: 4px;
+}
+
+.module-graph-duplicates {
+  padding: 8px 16px;
+  background: var(--color-amber-100);
+  border-bottom: 1px solid var(--color-amber-300);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.module-graph-duplicates-label {
+  color: var(--color-amber-900);
+  font-weight: 500;
+}
+
+.module-graph-duplicate-tag {
+  background: var(--color-amber-200);
+  color: var(--color-amber-900);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  font-family: var(--font-mono);
+}
+
+.module-graph-duplicate-tag:hover {
+  background: var(--color-amber-300);
+}
+
+.module-graph-duplicate-versions {
+  color: var(--color-amber-700);
+  margin-left: 4px;
+  font-size: 11px;
 }
 
 .module-graph-content {
@@ -39,6 +88,15 @@
 .module-graph-item {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.module-graph-item-highlighted {
+  background: var(--color-amber-100);
+  border-radius: 4px;
+}
+
+.module-graph-item-highlighted > .module-graph-item-row {
+  background: var(--color-amber-200);
 }
 
 .module-graph-item-row {
@@ -121,6 +179,16 @@
   color: var(--color-gray-600);
   min-width: 50px;
   text-align: right;
+}
+
+.module-graph-size-warning {
+  color: var(--color-amber-800);
+  font-weight: 500;
+}
+
+.module-graph-size-large {
+  color: var(--color-red-800);
+  font-weight: 600;
 }
 
 .module-graph-item-children {

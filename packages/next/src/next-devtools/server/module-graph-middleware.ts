@@ -10,6 +10,25 @@ import { middlewareResponse } from './middleware-response'
 
 const MODULE_GRAPH_ENDPOINT = '/__nextjs_module_graph'
 
+/**
+ * Bundle size thresholds (in bytes)
+ * Based on Webpack's default 244 KiB recommendation
+ * See: https://stackoverflow.com/questions/49348365/webpack-4-size-exceeds-the-recommended-limit-244-kib
+ */
+const SIZE_THRESHOLDS = {
+  /** Individual package warning threshold: 50 KB */
+  PACKAGE_WARNING: 50 * 1024,
+  /** Individual package large threshold: 100 KB */
+  PACKAGE_LARGE: 100 * 1024,
+  /** Total bundle warning threshold: 250 KB (similar to Webpack's 244 KiB) */
+  TOTAL_WARNING: 250 * 1024,
+  /** Total bundle large threshold: 500 KB */
+  TOTAL_LARGE: 500 * 1024,
+}
+
+/** Size status indicator */
+type SizeStatus = 'normal' | 'warning' | 'large'
+
 /** Module in the output */
 interface ModuleGraphModule {
   /** Source file path */
@@ -18,6 +37,8 @@ interface ModuleGraphModule {
   type: 'userland' | 'external'
   /** Size in bytes */
   size: number
+  /** Size status for highlighting */
+  sizeStatus?: SizeStatus
   /** Minimum depth from entry */
   depth: number
   /** Layer from module ident (e.g., 'rsc', 'client', 'ssr', 'action-browser') */
@@ -28,6 +49,22 @@ interface ModuleGraphModule {
   version?: string
   /** Debug: raw ident */
   ident?: string
+}
+
+/**
+ * Get size status based on thresholds
+ */
+function getSizeStatus(size: number, isTotal: boolean = false): SizeStatus {
+  const warningThreshold = isTotal
+    ? SIZE_THRESHOLDS.TOTAL_WARNING
+    : SIZE_THRESHOLDS.PACKAGE_WARNING
+  const largeThreshold = isTotal
+    ? SIZE_THRESHOLDS.TOTAL_LARGE
+    : SIZE_THRESHOLDS.PACKAGE_LARGE
+
+  if (size >= largeThreshold) return 'large'
+  if (size >= warningThreshold) return 'warning'
+  return 'normal'
 }
 
 /**
@@ -70,6 +107,14 @@ function extractLayerFromIdent(ident: string): string | null {
   return null
 }
 
+/** Duplicate package info */
+interface DuplicatePackage {
+  /** Base package name (without version) */
+  name: string
+  /** All versions found */
+  versions: string[]
+}
+
 interface ModuleGraphResult {
   route: string
   routeType: string
@@ -78,8 +123,11 @@ interface ModuleGraphResult {
     userlandModules: number
     externalPackages: number
     totalSize: number
+    totalSizeStatus: SizeStatus
   }
   modules: ModuleGraphModule[]
+  /** Packages with multiple versions */
+  duplicates: DuplicatePackage[]
 }
 
 /**
@@ -257,6 +305,44 @@ function processGraphLayer(
 }
 
 /**
+ * Calculate total size of a package including all its transitive dependencies
+ */
+function calculatePackageTotalSize(
+  packagePath: string,
+  moduleMap: Map<
+    string,
+    {
+      type: 'userland' | 'external'
+      size: number
+      depth: number
+      layer: string | null
+      imports: Set<string>
+      version?: string
+      ident: string
+    }
+  >,
+  visited: Set<string> = new Set()
+): number {
+  if (visited.has(packagePath)) return 0
+  visited.add(packagePath)
+
+  const module = moduleMap.get(packagePath)
+  if (!module) return 0
+
+  let totalSize = module.size
+
+  // Add sizes of all external dependencies (transitive deps)
+  for (const importPath of module.imports) {
+    const importedModule = moduleMap.get(importPath)
+    if (importedModule && importedModule.type === 'external') {
+      totalSize += calculatePackageTotalSize(importPath, moduleMap, visited)
+    }
+  }
+
+  return totalSize
+}
+
+/**
  * Build module graph from endpoints
  */
 async function buildModuleGraph(
@@ -293,25 +379,58 @@ async function buildModuleGraph(
     }
   }
 
+  // Find root external packages (directly imported by userland modules)
+  const rootExternalPackages = new Set<string>()
+  for (const [, data] of moduleMap) {
+    if (data.type === 'userland') {
+      for (const importPath of data.imports) {
+        const importedModule = moduleMap.get(importPath)
+        if (importedModule && importedModule.type === 'external') {
+          rootExternalPackages.add(importPath)
+        }
+      }
+    }
+  }
+
   // Convert to output format
   const modules: ModuleGraphModule[] = []
   let userlandCount = 0
   let externalCount = 0
 
   for (const [source, data] of moduleMap) {
-    if (data.type === 'userland') userlandCount++
-    else externalCount++
+    // For external packages, only include root packages (directly imported by userland)
+    if (data.type === 'external') {
+      if (!rootExternalPackages.has(source)) continue
 
-    modules.push({
-      source,
-      type: data.type,
-      size: data.size,
-      depth: data.depth,
-      layer: data.layer,
-      imports: Array.from(data.imports),
-      version: data.version,
-      ident: data.ident,
-    })
+      // Calculate total size including transitive dependencies
+      const totalSize = calculatePackageTotalSize(source, moduleMap)
+      externalCount++
+
+      modules.push({
+        source,
+        type: data.type,
+        size: totalSize,
+        sizeStatus: getSizeStatus(totalSize),
+        depth: data.depth,
+        layer: data.layer,
+        imports: [], // Don't expose transitive deps
+        version: data.version,
+        ident: data.ident,
+      })
+    } else {
+      userlandCount++
+      modules.push({
+        source,
+        type: data.type,
+        size: data.size,
+        sizeStatus: getSizeStatus(data.size),
+        depth: data.depth,
+        layer: data.layer,
+        imports: Array.from(data.imports),
+        version: data.version,
+        ident: data.ident,
+      })
+    }
   }
 
   // Sort: userland first by depth, then external by size
@@ -323,6 +442,32 @@ async function buildModuleGraph(
     return b.size - a.size
   })
 
+  const totalSize = modules.reduce((acc, m) => acc + m.size, 0)
+
+  // Detect duplicate packages (same name, different versions)
+  const packageVersions = new Map<string, string[]>()
+  for (const module of modules) {
+    if (module.type === 'external') {
+      // Extract base package name from source (e.g., "uuid@9.0.0" -> "uuid")
+      const atIndex = module.source.lastIndexOf('@')
+      if (atIndex > 0) {
+        const baseName = module.source.slice(0, atIndex)
+        const version = module.source.slice(atIndex + 1)
+        const versions = packageVersions.get(baseName) || []
+        versions.push(version)
+        packageVersions.set(baseName, versions)
+      }
+    }
+  }
+
+  // Filter to only packages with multiple versions
+  const duplicates: DuplicatePackage[] = []
+  for (const [name, versions] of packageVersions) {
+    if (versions.length > 1) {
+      duplicates.push({ name, versions: versions.sort() })
+    }
+  }
+
   return {
     route,
     routeType,
@@ -330,9 +475,11 @@ async function buildModuleGraph(
       totalModules: modules.length,
       userlandModules: userlandCount,
       externalPackages: externalCount,
-      totalSize: modules.reduce((acc, m) => acc + m.size, 0),
+      totalSize,
+      totalSizeStatus: getSizeStatus(totalSize, true),
     },
     modules,
+    duplicates,
   }
 }
 

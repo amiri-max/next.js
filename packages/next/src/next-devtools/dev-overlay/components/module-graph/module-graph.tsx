@@ -1,15 +1,23 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import './module-graph.css'
 
+type SizeStatus = 'normal' | 'warning' | 'large'
+
 interface ModuleGraphModule {
   source: string
   type: 'userland' | 'external'
   size: number
+  sizeStatus?: SizeStatus
   depth: number
   layer: string | null
   imports: string[]
   version?: string
   ident?: string
+}
+
+interface DuplicatePackage {
+  name: string
+  versions: string[]
 }
 
 interface ModuleGraphData {
@@ -20,8 +28,10 @@ interface ModuleGraphData {
     userlandModules: number
     externalPackages: number
     totalSize: number
+    totalSizeStatus: SizeStatus
   }
   modules: ModuleGraphModule[]
+  duplicates: DuplicatePackage[]
   error?: string
 }
 
@@ -60,19 +70,28 @@ function ModuleItem({
   allModules,
   expandedModules,
   toggleModule,
+  highlightedPackage,
   depth = 0,
 }: {
   module: ModuleGraphModule
   allModules: Map<string, ModuleGraphModule>
   expandedModules: Set<string>
   toggleModule: (source: string) => void
+  highlightedPackage?: string | null
   depth?: number
 }) {
   const hasImports = module.imports.length > 0
   const isExpanded = expandedModules.has(module.source)
 
+  // Check if this module should be highlighted (matches the highlighted package name)
+  const isHighlighted =
+    highlightedPackage && module.source.startsWith(highlightedPackage + '@')
+
   return (
-    <div className="module-graph-item" data-depth={depth}>
+    <div
+      className={`module-graph-item ${isHighlighted ? 'module-graph-item-highlighted' : ''}`}
+      data-depth={depth}
+    >
       <div
         className={`module-graph-item-row ${hasImports ? 'module-graph-item-expandable' : ''}`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -95,7 +114,15 @@ function ModuleItem({
               {module.layer}
             </span>
           )}
-          <span className="module-graph-item-size">
+          <span
+            className={`module-graph-item-size ${module.sizeStatus ? `module-graph-size-${module.sizeStatus}` : ''}`}
+          >
+            {module.sizeStatus === 'large' && (
+              <span className="module-graph-warning-icon">⚠</span>
+            )}
+            {module.sizeStatus === 'warning' && (
+              <span className="module-graph-warning-icon">●</span>
+            )}
             {formatBytes(module.size)}
           </span>
         </span>
@@ -123,6 +150,7 @@ function ModuleItem({
                 allModules={allModules}
                 expandedModules={expandedModules}
                 toggleModule={toggleModule}
+                highlightedPackage={highlightedPackage}
                 depth={depth + 1}
               />
             )
@@ -159,6 +187,9 @@ interface FetchResult {
 export function ModuleGraph({ page }: { page: string }) {
   const [result, setResult] = useState<FetchResult | null>(null)
   const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set())
+  const [highlightedPackage, setHighlightedPackage] = useState<string | null>(
+    null
+  )
 
   // Derive route from page prop directly
   const route = useMemo(() => getRouteFromPage(page), [page])
@@ -283,7 +314,37 @@ export function ModuleGraph({ page }: { page: string }) {
     <div className="module-graph-container">
       <div className="module-graph-header">
         <div className="module-graph-route">{data.route}</div>
+        <div
+          className={`module-graph-total-size ${data.summary.totalSizeStatus !== 'normal' ? `module-graph-size-${data.summary.totalSizeStatus}` : ''}`}
+        >
+          {data.summary.totalSizeStatus === 'large' && (
+            <span className="module-graph-warning-icon">⚠</span>
+          )}
+          {data.summary.totalSizeStatus === 'warning' && (
+            <span className="module-graph-warning-icon">●</span>
+          )}
+          Total: {formatBytes(data.summary.totalSize)}
+        </div>
       </div>
+
+      {data.duplicates.length > 0 && (
+        <div className="module-graph-duplicates">
+          <span className="module-graph-duplicates-label">Duplicates:</span>
+          {data.duplicates.map((dup) => (
+            <span
+              key={dup.name}
+              className="module-graph-duplicate-tag"
+              onMouseEnter={() => setHighlightedPackage(dup.name)}
+              onMouseLeave={() => setHighlightedPackage(null)}
+            >
+              {dup.name}
+              <span className="module-graph-duplicate-versions">
+                ({dup.versions.join(', ')})
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
 
       <div className="module-graph-content">
         {rootModules.length > 0 && (
@@ -296,6 +357,7 @@ export function ModuleGraph({ page }: { page: string }) {
                 allModules={allModulesMap}
                 expandedModules={expandedModules}
                 toggleModule={toggleModule}
+                highlightedPackage={highlightedPackage}
               />
             ))}
           </div>
@@ -311,6 +373,7 @@ export function ModuleGraph({ page }: { page: string }) {
                 allModules={allModulesMap}
                 expandedModules={expandedModules}
                 toggleModule={toggleModule}
+                highlightedPackage={highlightedPackage}
               />
             ))}
           </div>
