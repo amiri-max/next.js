@@ -14,6 +14,7 @@ async function readFiles(next: NextInstance) {
     (await glob('**/*', {
       cwd: path.join(next.testDir, next.distDir),
       nodir: true,
+      ignore: 'cache/**',
     })) as string[]
   )
     .filter((f) => !IGNORE.test(f))
@@ -32,15 +33,15 @@ async function readFiles(next: NextInstance) {
 const IGNORE_NAME = /^static\/chunks\//
 const IGNORE_CONTENT = new RegExp(
   [
-    // HTML and RSC files contain the deployment ID as a query param
+    // HTML and RSC files reference static assets with content hashes and deployment ids
     '.html',
     '.rsc',
-    // These all contain content-hashed browser or edge chunk names
+    // These all reference static assets with content hashes and deployment ids
     'build-manifest.json',
     'page_client-reference-manifest.js',
     '_buildManifest.js',
     'middleware-build-manifest.js',
-    // required-server-files.json contains the deployment ID, unclear whether this is a problem
+    // required-server-files.json contains the deployment ID
     'required-server-files.json',
   ]
     .map((v) => v.replace(/\./g, '\\.').replace(/\//g, '\\/') + '$')
@@ -100,7 +101,7 @@ const IGNORE_CONTENT = new RegExp(
         if (content1 !== content2) {
           if (
             content1.includes('function getDeploymentId()') &&
-            content1.includes('function getDeploymentId()')
+            content2.includes('function getDeploymentId()')
           ) {
             // TODO this will be replaced with an implementation that doesn't inline at build time
             continue
