@@ -167,13 +167,15 @@ export function getDefineEnv({
     'process.env.__NEXT_CACHE_COMPONENTS': isCacheComponentsEnabled,
     'process.env.__NEXT_USE_CACHE': isUseCacheEnabled,
 
-    ...(isClient
+    ...(!config.experimental?.useSkewCookie
       ? {
-          'process.env.NEXT_DEPLOYMENT_ID': config.experimental?.useSkewCookie
-            ? false
-            : config.deploymentId || false, // TODO replace that with "globalThis.NEXT_DEPLOYMENT_ID" when deployment id is received from HTML
+          'process.env.NEXT_DEPLOYMENT_ID': false,
         }
-      : {}),
+      : isClient
+        ? {
+            'process.env.NEXT_DEPLOYMENT_ID': config.deploymentId || false, // TODO replace that with "globalThis.NEXT_DEPLOYMENT_ID" when deployment id is received from HTML
+          }
+        : {}),
     // Propagates the `__NEXT_EXPERIMENTAL_STATIC_SHELL_DEBUGGING` environment
     // variable to the client.
     'process.env.__NEXT_EXPERIMENTAL_STATIC_SHELL_DEBUGGING':
